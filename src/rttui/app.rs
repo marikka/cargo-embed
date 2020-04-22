@@ -18,8 +18,6 @@ use unicode_width::UnicodeWidthStr;
 use super::channel::ChannelState;
 use super::event::{Event, Events};
 
-use crate::config::CONFIG;
-
 /// App holds the state of the application
 pub struct App {
     tabs: Vec<ChannelState>,
@@ -30,17 +28,16 @@ pub struct App {
 }
 
 fn pull_channel<C: RttChannel>(channels: &mut Vec<C>, n: usize) -> Option<C> {
-    let c =
-        channels
-            .iter()
-            .enumerate()
-            .find_map(|(i, c)| if c.number() == n { Some(i) } else { None });
+    let c = channels
+        .iter()
+        .enumerate()
+        .find_map(|(i, c)| if c.number() == n { Some(i) } else { None });
 
     c.map(|c| channels.remove(c))
 }
 
 impl App {
-    pub fn new(mut rtt: probe_rs_rtt::Rtt) -> Self {
+    pub fn new(mut rtt: probe_rs_rtt::Rtt, config: &crate::config::Config) -> Self {
         let stdout = std::io::stdout().into_raw_mode().unwrap();
         let stdout = AlternateScreen::from(stdout);
         let backend = TermionBackend::new(stdout);
@@ -51,8 +48,8 @@ impl App {
         let mut tabs = Vec::new();
         let mut up_channels = rtt.up_channels().drain().collect::<Vec<_>>();
         let mut down_channels = rtt.down_channels().drain().collect::<Vec<_>>();
-        if !CONFIG.rtt.channels.is_empty() {
-            for channel in &CONFIG.rtt.channels {
+        if !config.rtt.channels.is_empty() {
+            for channel in &config.rtt.channels {
                 tabs.push(ChannelState::new(
                     channel.up.and_then(|up| pull_channel(&mut up_channels, up)),
                     channel

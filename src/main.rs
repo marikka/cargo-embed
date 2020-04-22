@@ -27,10 +27,10 @@ use probe_rs::{
 };
 use probe_rs_rtt::{Rtt, ScanRegion};
 
-use crate::config::CONFIG;
-
 #[derive(Debug, StructOpt)]
 struct Opt {
+    #[structopt(name = "config")]
+    config: Option<String>,
     #[structopt(name = "list-chips", long = "list-chips")]
     list_chips: bool,
     #[structopt(name = "disable-progressbars", long = "disable-progressbars")]
@@ -91,10 +91,15 @@ fn main_try() -> Result<(), failure::Error> {
     // Get commandline options.
     let opt = Opt::from_iter(&args);
 
-    logging::init(Some(CONFIG.general.log_level));
+    // Get the config.
+    let config_name = opt.config.as_deref().unwrap_or_else(|| "default");
+    let config = config::Configs::new(config_name)
+        .map_err(|e| format_err!("The config could not be loaded: {}", e))?;
+
+    logging::init(Some(config.general.log_level));
 
     // Make sure we load the config given in the cli parameters.
-    for cdp in &CONFIG.general.chip_descriptions {
+    for cdp in &config.general.chip_descriptions {
         probe_rs::config::registry::add_target_from_yaml(&Path::new(cdp))?;
     }
 
@@ -102,7 +107,7 @@ fn main_try() -> Result<(), failure::Error> {
         print_families()?;
         std::process::exit(0);
     } else {
-        CONFIG
+        config
             .general
             .chip
             .as_ref()
@@ -115,6 +120,11 @@ fn main_try() -> Result<(), failure::Error> {
 
     // Remove all arguments that `cargo build` does not understand.
     helpers::remove_arguments(ARGUMENTS_TO_REMOVE, &mut args);
+
+    if let Some(index) = args.iter().position(|x| x == config_name) {
+        // We remove the argument we found.
+        args.remove(index);
+    }
 
     let status = Command::new("cargo")
         .arg("build")
@@ -165,7 +175,7 @@ fn main_try() -> Result<(), failure::Error> {
     let list = Probe::list_all();
     println!("{:?}", list);
 
-    let device = match CONFIG.probe.probe_index {
+    let device = match config.probe.probe_index {
         Some(index) => list.get(index).ok_or_else(|| {
             format_err!("Unable to open probe with index {}: Probe not found", index)
         })?,
@@ -182,9 +192,9 @@ fn main_try() -> Result<(), failure::Error> {
     };
 
     let mut probe = Probe::from_probe_info(&device)?;
-    probe.select_protocol(CONFIG.probe.protocol)?;
+    probe.select_protocol(config.probe.protocol)?;
 
-    let protocol_speed = if let Some(speed) = CONFIG.probe.speed {
+    let protocol_speed = if let Some(speed) = config.probe.speed {
         let actual_speed = probe.set_speed(speed)?;
 
         if actual_speed < speed {
@@ -217,7 +227,7 @@ fn main_try() -> Result<(), failure::Error> {
                 .template("{msg:.green.bold} {spinner} [{elapsed_precise}] [{wide_bar}] {bytes:>8}/{total_bytes:>8} @ {bytes_per_sec:>10} (eta {eta:3})");
 
         // Create a new progress bar for the fill progress if filling is enabled.
-        let fill_progress = if CONFIG.flashing.restore_unwritten_bytes {
+        let fill_progress = if config.flashing.restore_unwritten_bytes {
             let fill_progress = Arc::new(multi_progress.add(ProgressBar::new(0)));
             fill_progress.set_style(style.clone());
             fill_progress.set_message("     Reading flash  ");
@@ -239,7 +249,7 @@ fn main_try() -> Result<(), failure::Error> {
         program_progress.set_style(style);
         program_progress.set_message(" Programming pages  ");
 
-        let flash_layout_output_path = CONFIG.flashing.flash_layout_output_path.clone();
+        let flash_layout_output_path = config.flashing.flash_layout_output_path.clone();
         // Register callback to update the progress.
         let progress = FlashProgress::new(move |event| {
             use ProgressEvent::*;
@@ -325,7 +335,7 @@ fn main_try() -> Result<(), failure::Error> {
             Format::Elf,
             DownloadOptions {
                 progress: Some(&progress),
-                keep_unwritten_bytes: CONFIG.flashing.restore_unwritten_bytes,
+                keep_unwritten_bytes: config.flashing.restore_unwritten_bytes,
             },
         )
         .map_err(|e| format_err!("failed to flash {}: {}", path.display(), e))?;
@@ -339,7 +349,7 @@ fn main_try() -> Result<(), failure::Error> {
             Format::Elf,
             DownloadOptions {
                 progress: None,
-                keep_unwritten_bytes: CONFIG.flashing.restore_unwritten_bytes,
+                keep_unwritten_bytes: config.flashing.restore_unwritten_bytes,
             },
         )
         .map_err(|e| format_err!("failed to flash {}: {}", path.display(), e))?;
@@ -353,20 +363,20 @@ fn main_try() -> Result<(), failure::Error> {
         elapsed.as_millis() as f32 / 1000.0,
     ));
 
-    if CONFIG.flashing.halt_afterwards {
+    if config.flashing.halt_afterwards {
         core.reset_and_halt()?;
     } else {
         core.reset()?;
     }
 
-    if CONFIG.gdb.enabled && CONFIG.rtt.enabled {
+    if config.gdb.enabled && config.rtt.enabled {
         return Err(format_err!(
             "Unfortunately, at the moment, only GDB OR RTT are possible."
         ));
     }
 
-    if CONFIG.gdb.enabled {
-        let gdb_connection_string = CONFIG
+    if config.gdb.enabled {
+        let gdb_connection_string = config
             .gdb
             .gdb_connection_string
             .as_deref()
@@ -382,11 +392,11 @@ fn main_try() -> Result<(), failure::Error> {
             logging::eprintln("During the execution of GDB an error was encountered:");
             logging::eprintln(format!("{:?}", e));
         }
-    } else if CONFIG.rtt.enabled {
+    } else if config.rtt.enabled {
         let t = std::time::Instant::now();
         let mut error = None;
         let core = std::rc::Rc::new(core);
-        while (t.elapsed().as_millis() as usize) < CONFIG.rtt.timeout {
+        while (t.elapsed().as_millis() as usize) < config.rtt.timeout {
             let rtt_header_address = if let Ok(mut file) = File::open(path.as_path()) {
                 if let Some(address) = rttui::app::App::get_rtt_symbol(&mut file) {
                     ScanRegion::Exact(address as u32)
@@ -399,7 +409,7 @@ fn main_try() -> Result<(), failure::Error> {
 
             match Rtt::attach_region(core.clone(), &session, &rtt_header_address) {
                 Ok(rtt) => {
-                    let mut app = rttui::app::App::new(rtt);
+                    let mut app = rttui::app::App::new(rtt, &config);
                     loop {
                         app.poll_rtt();
                         app.render();
