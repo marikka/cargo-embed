@@ -96,6 +96,8 @@ fn main_try() -> Result<(), failure::Error> {
     let config = config::Configs::new(config_name)
         .map_err(|e| format_err!("The config could not be loaded: {}", e))?;
 
+    println!("{:#?}", config);
+
     logging::init(Some(config.general.log_level));
 
     // Make sure we load the config given in the cli parameters.
@@ -173,7 +175,6 @@ fn main_try() -> Result<(), failure::Error> {
     ));
 
     let list = Probe::list_all();
-    println!("{:?}", list);
 
     let device = match config.probe.probe_index {
         Some(index) => list.get(index).ok_or_else(|| {
